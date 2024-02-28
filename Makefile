@@ -45,7 +45,6 @@ run-publish: create-network
 publish-interactive:
 	docker run -it --rm --network $(NETWORK_NAME) \
 	--name $(CONTAINER_NAME_PUBLISH) \
-	-e ROS_MASTER_URI=http://$(CONTAINER_NAME_MASTER):11311 \
 	--device /dev/bus/usb \
 	$(IMAGE_NAME_PUBLISH) /bin/bash
 
