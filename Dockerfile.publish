@@ -1,0 +1,35 @@
+# Use an Ubuntu 20.04 base image compatible with ARM architectures
+FROM ubuntu:20.04
+
+# Avoid prompts from apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Update and install necessary packages
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg2 \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add the ROS repository
+RUN sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
+
+# Import the ROS key
+RUN curl -s https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | apt-key add -
+
+# Install ROS Noetic, the realsense2 camera package, and the RPLIDAR package
+RUN apt-get update && apt-get install -y ros-noetic-ros-base
+RUN apt-get install -y ros-noetic-realsense2-camera python3-rosdep
+RUN apt-get install -y ros-noetic-rplidar-ros && rm -rf /var/lib/apt/lists/*
+
+# Initialize rosdep
+RUN /bin/bash -c "source /opt/ros/noetic/setup.bash && rosdep init && rosdep update"
+
+# Setup the environment
+RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
+
+
+# Use bash as the default command
+# Use bash as the default command to run rostopic echo on the specified RealSense topic with the --noarr flag
+CMD ["/bin/bash", "-c", "roslaunch realsense2_camera rs_camera.launch"]
+
