@@ -29,5 +29,6 @@ sudo systemctl enable docker
 
 # Start Docker service
 sudo systemctl start docker
+newgrp docker
 
 echo "Docker installation on Ubuntu 23.04 for Raspberry Pi is complete."

@@ -30,3 +30,9 @@ The script `install_docker_on_pi.sh` automates the process of installing Docker 
 ## Usage
 
 To use this repository, clone it to your local machine or Raspberry Pi, ensure Docker is installed and running, and then utilize the Makefile commands to build images, create containers, and manage the network as needed for your ROS Noetic projects.
+
+The recommended `Makefile` order is:
+
+`make create-network`
+`make build-publish`
+`make run-publish`
