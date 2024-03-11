@@ -34,7 +34,7 @@ build-publish:
 
 # Run the Docker container for publishing data and act as ROS master
 # This currently does not work, but the command is useful
-run-publish: create-network
+run-publish:
 	docker run -it --rm --network host \
 	--name $(CONTAINER_NAME_PUBLISH) \
 	-e ROS_MASTER_URI=$(ROS_MASTER_URI) \
