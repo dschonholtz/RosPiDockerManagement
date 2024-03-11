@@ -8,12 +8,8 @@ CONTAINER_NAME_RECEIVE=ros-receive-container
 CONTAINER_NAME_PUBLISH=ros-publish-container
 CONTAINER_NAME_MASTER=ros-master-container
 
-# Define the Docker network name
-NETWORK_NAME=ros-network
-
-# Create the Docker network (if it doesn't already exist)
-create-network:
-	docker network create $(NETWORK_NAME) || true
+ROS_MASTER_URI=http://192.168.1.45:11311
+ROS_IP=192.168.1.45
 
 # Build the Docker image for the ROS master node using Dockerfile.roscore
 build-master:
@@ -34,6 +30,7 @@ build-publish:
 	docker build -f Dockerfile.publish -t $(IMAGE_NAME_PUBLISH) .
 
 # Run the Docker container for publishing data and act as ROS master
+# This currently does not work, but the command is useful
 run-publish: create-network
 	docker run -it --rm --network host \
 	--name $(CONTAINER_NAME_PUBLISH) \
@@ -45,6 +42,8 @@ run-publish: create-network
 publish-interactive:
 	docker run -it --rm --network host \
 	--name $(CONTAINER_NAME_PUBLISH) \
+	-e ROS_MASTER_URI=$(ROS_MASTER_URI) \
+	-e ROS_IP=$(ROS_IP) \
 	--device /dev/bus/usb \
 	$(IMAGE_NAME_PUBLISH) /bin/bash
 
