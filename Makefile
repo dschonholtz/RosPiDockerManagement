@@ -35,7 +35,7 @@ build-publish:
 
 # Run the Docker container for publishing data and act as ROS master
 run-publish: create-network
-	docker run -it --rm --network $(NETWORK_NAME) \
+	docker run -it --rm --network host \
 	--name $(CONTAINER_NAME_PUBLISH) \
 	-e ROS_MASTER_URI=http://$(CONTAINER_NAME_MASTER):11311 \
 	--device /dev/bus/usb \
@@ -43,7 +43,7 @@ run-publish: create-network
 
 
 publish-interactive:
-	docker run -it --rm --network $(NETWORK_NAME) \
+	docker run -it --rm --network host \
 	--name $(CONTAINER_NAME_PUBLISH) \
 	--device /dev/bus/usb \
 	$(IMAGE_NAME_PUBLISH) /bin/bash
