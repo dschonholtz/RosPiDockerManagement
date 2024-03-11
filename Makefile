@@ -41,7 +41,7 @@ run-publish:
 	-e ROS_IP=$(ROS_IP) \
 	-v $(LAUNCH_VOLUME):/home/ubuntu/catkin_ws \
 	-v $(SCRIPTS_VOLUME):/home/ubuntu/scripts \
-	--device /dev/bus/usb \
+	--privileged \
 	$(IMAGE_NAME_PUBLISH)
 
 
@@ -52,7 +52,7 @@ publish-interactive:
 	-e ROS_IP=$(ROS_IP) \
 	-v $(LAUNCH_VOLUME):/home/ubuntu/catkin_ws \
 	-v $(SCRIPTS_VOLUME):/home/ubuntu/scripts \
-	--device /dev/bus/usb \
+	--privileged \
 	$(IMAGE_NAME_PUBLISH) /bin/bash
 
 
