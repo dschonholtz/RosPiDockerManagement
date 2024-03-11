@@ -10,6 +10,9 @@ CONTAINER_NAME_MASTER=ros-master-container
 
 ROS_MASTER_URI=http://192.168.1.45:11311
 ROS_IP=192.168.1.45
+LAUNCH_VOLUME=/home/ubuntu/catkin_ws/
+SCRIPTS_VOLUME=./scripts_volume
+
 
 # Build the Docker image for the ROS master node using Dockerfile.roscore
 build-master:
@@ -34,7 +37,10 @@ build-publish:
 run-publish: create-network
 	docker run -it --rm --network host \
 	--name $(CONTAINER_NAME_PUBLISH) \
-	-e ROS_MASTER_URI=http://$(CONTAINER_NAME_MASTER):11311 \
+	-e ROS_MASTER_URI=$(ROS_MASTER_URI) \
+	-e ROS_IP=$(ROS_IP) \
+	-v $(LAUNCH_VOLUME):/home/ubuntu/catkin_ws \
+	-v $(SCRIPTS_VOLUME):/home/ubuntu/scripts \
 	--device /dev/bus/usb \
 	$(IMAGE_NAME_PUBLISH)
 
@@ -44,6 +50,8 @@ publish-interactive:
 	--name $(CONTAINER_NAME_PUBLISH) \
 	-e ROS_MASTER_URI=$(ROS_MASTER_URI) \
 	-e ROS_IP=$(ROS_IP) \
+	-v $(LAUNCH_VOLUME):/home/ubuntu/catkin_ws \
+	-v $(SCRIPTS_VOLUME):/home/ubuntu/scripts \
 	--device /dev/bus/usb \
 	$(IMAGE_NAME_PUBLISH) /bin/bash
 
