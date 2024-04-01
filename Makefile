@@ -52,8 +52,7 @@ publish-interactive:
 	-e ROS_IP=$(ROS_IP) \
 	-v $(LAUNCH_VOLUME):/home/ubuntu/catkin_ws \
 	-v $(SCRIPTS_VOLUME):/home/ubuntu/scripts \
-	-v /dev/bus/usb:/dev/bus/usb \
-	-v /dev/ttyUSB0:/dev/ttyUSB0 \
+	-v /dev:/dev \
 	--privileged \
 	$(IMAGE_NAME_PUBLISH) /bin/bash
 
