@@ -25,6 +25,7 @@ RUN apt install -y python3-rosdep python3-rosinstall python3-rosinstall-generato
 RUN apt-get install -y ros-noetic-realsense2-camera python3-rosdep
 RUN apt-get install -y ros-noetic-rplidar-ros ros-noetic-hector-slam
 RUN apt-get install -y python3-catkin-tools
+RUN apt-get install -y ros-noetic-depth-image-proc ros-noetic-move-base
 RUN rm -rf /var/lib/apt/lists/*
 
 # Initialize rosdep
