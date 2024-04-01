@@ -8,7 +8,7 @@ CONTAINER_NAME_RECEIVE=ros-receive-container
 CONTAINER_NAME_PUBLISH=ros-publish-container
 CONTAINER_NAME_MASTER=ros-master-container
 
-ROS_MASTER_URI=http://192.168.1.45:11311
+ROS_MASTER_URI=http://192.168.1.41:11311
 ROS_IP=192.168.1.45
 LAUNCH_VOLUME=/home/ubuntu/catkin_ws/
 SCRIPTS_VOLUME=./scripts_volume
