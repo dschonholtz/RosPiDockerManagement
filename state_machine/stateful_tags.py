@@ -25,40 +25,70 @@ class RobotNode(object):
         self.state = self.SEARCHING
         self.tag_detected = False
         self.commandQueue = []
+        self.buffer = tf2_ros.Buffer()
+        self.tflistener = tf2_ros.TransformListener(self.buffer)
+        self.move_base_pub = rospy.Publisher(
+            "/move_base_simple/goal", PoseStamped, queue_size=10
+        )
+
+        rospy.Subscriber(
+            "/tag_detections", AprilTagDetectionArray, self.tag_detections_callback
+        )
+        self.commander = MoveGroupCommander("arm")
 
     def tag_detections_callback(self, tag_detections):
         if not tag_detections.detections:
             self.state = self.SEARCHING
             self.tag_detected = False
+            self.execute_searching_state()
             return
         self.tag_detected = True
         detection = tag_detections.detections[0]
         tag_id = detection.id[0]
-        tag_pose = detection.pose.pose.pose
+        self.current_detection = detection
 
         # Calculate the distance to the tag
-        distance = self.calculate_distance(tag_pose)
-
-        if distance > 1.0:
+        distance = self.calculate_distance(detection)
+        print(f"distance: {distance}")
+        print(f"state: {self.state}")
+        if distance > 1.6:
             if self.state != self.MOVING_BASE:
                 print(f"Moving base towards tag {tag_id}")
                 self.state = self.MOVING_BASE
-                self.execute_moving_base_state(tag_pose)
+                self.execute_moving_base_state()
         else:
             if self.state != self.MOVING_ARM:
                 print(f"Moving arm towards tag {tag_id}")
                 self.state = self.MOVING_ARM
-                self.execute_moving_arm_state(tag_pose)
+                self.execute_moving_arm_state()
 
-    def calculate_distance(self, tag_pose):
+    def get_pose_msg_from_detection(self, detection):
+        camera_frame = detection.pose.header.frame_id
+        tag_pose = detection.pose.pose.pose
+        pose_msg = PoseStamped()
+        pose_msg.header.frame_id = camera_frame
+        pose_msg.pose.position.x = tag_pose.position.x
+        pose_msg.pose.position.y = tag_pose.position.y
+        pose_msg.pose.position.z = tag_pose.position.z
+
+        pose_msg.pose.orientation.x = tag_pose.orientation.x
+        pose_msg.pose.orientation.y = tag_pose.orientation.y
+        pose_msg.pose.orientation.z = tag_pose.orientation.z
+        pose_msg.pose.orientation.w = tag_pose.orientation.w
+        return pose_msg
+
+    def calculate_distance(self, detection):
         try:
             # Ensure the transform is available
+            camera_frame = detection.pose.header.frame_id
             trans = self.buffer.lookup_transform(
-                "base_link", tag_pose.header.frame_id, rospy.Time(0)
+                "capstone/base_link", camera_frame, rospy.Time(0)
             )
 
-            # Transform the tag pose from its frame to the base_link frame
-            pose_transformed = tf2_geometry_msgs.do_transform_pose(tag_pose, trans)
+            pose_msg = self.get_pose_msg_from_detection(
+                detection=self.current_detection
+            )
+            pose_transformed = tf2_geometry_msgs.do_transform_pose(pose_msg, trans)
 
             # Extract the transformed position
             transformed_position = pose_transformed.pose.position
@@ -69,7 +99,6 @@ class RobotNode(object):
                 + transformed_position.y**2
                 + transformed_position.z**2
             )
-
             return distance
         except (
             tf2_ros.LookupException,
@@ -94,28 +123,57 @@ class RobotNode(object):
         except MoveItCommanderException as e:
             rospy.logerr("Error in resetting arm to default pose: %s" % str(e))
 
+    def get_current_base_orientation(self):
+        try:
+            # Get the current transform from the base_link to the map frame
+            trans = self.buffer.lookup_transform(
+                "map", "capstone/base_link", rospy.Time(0)
+            )
+
+            # Extract the orientation from the transform
+            orientation = trans.transform.rotation
+
+            # Convert the quaternion orientation to Euler angles
+            (roll, pitch, yaw) = euler_from_quaternion(
+                [orientation.x, orientation.y, orientation.z, orientation.w]
+            )
+
+            return (roll, pitch, yaw)
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ConnectivityException,
+            tf2_ros.ExtrapolationException,
+        ):
+            rospy.logerr("Failed to get current base orientation")
+            return (0, 0, 0)  # Return default orientation if transformation fails
+
     def execute_searching_state(self):
         rospy.loginfo("Searching for tags: rotating base")
         try:
             # Create a goal pose for rotation
             goal_pose = PoseStamped()
-            goal_pose.header.frame_id = "base_link"
-            goal_pose.header.stamp = rospy.Time.now()
+            goal_pose.header.frame_id = "capstone/base_link"
 
-            # Keep the position same as the current position but change the orientation to rotate the base
-            # Here, we're assuming a simple rotation around the z-axis (yaw)
-            # Adjust the angle as needed for the desired rotation speed and direction
-            # Example: rotating 45 degrees (0.785 radians) to the right
-            yaw_rotation = 0.785  # Adjust this value as needed
-            q = quaternion_from_euler(0, 0, yaw_rotation)
+            goal_pose.header.stamp = rospy.Time(0)
+
+            # # Get the current orientation of the base
+            current_orientation = self.get_current_base_orientation()
+
+            # # Calculate the new orientation by adding 45 degrees (0.785 radians) to the current yaw
+            yaw_rotation = 0.785  # 45 degrees in radians
+            new_yaw = current_orientation[2] + yaw_rotation
+            q = quaternion_from_euler(0, 0, new_yaw)
 
             goal_pose.pose.orientation.x = q[0]
             goal_pose.pose.orientation.y = q[1]
             goal_pose.pose.orientation.z = q[2]
             goal_pose.pose.orientation.w = q[3]
 
+            goal_pose = self.buffer.transform(goal_pose, "map")
+
             # Append the rotate command to the command queue
-            self.commandQueue.append(("base", goal_pose))
+            if len(self.commandQueue) < 2:
+                self.commandQueue.append(("base", goal_pose))
             rospy.loginfo("Added rotate base command to the queue.")
         except Exception as e:
             rospy.logerr(
@@ -123,45 +181,64 @@ class RobotNode(object):
             )
 
     def execute_moving_base_state(self):
-        if not self.tag_detected or self.current_tag_pose is None:
+        if not self.tag_detected or self.current_detection is None:
             rospy.loginfo("No tag detected or tag pose not available.")
             return
 
         try:
+            pose_msg = PoseStamped()
+            pose_msg.header.frame_id = "tag_" + str(self.current_detection.id[0])
+            pose_msg.pose.position.x = 0
+            pose_msg.pose.position.y = 0
+            pose_msg.pose.position.z = 1
+            q = quaternion_from_euler(0, -1.5707, 1.5707)
+            pose_msg.pose.orientation.x = q[0]
+            pose_msg.pose.orientation.y = q[1]
+            pose_msg.pose.orientation.z = q[2]
+            pose_msg.pose.orientation.w = q[3]
             # Convert the tag pose to the robot's base frame
             trans = self.buffer.lookup_transform(
-                "base_link", self.current_tag_pose.header.frame_id, rospy.Time(0)
-            )
-            pose_transformed = tf2_geometry_msgs.do_transform_pose(
-                self.current_tag_pose, trans
+                "capstone/base_link",
+                "tag_" + str(self.current_detection.id[0]),
+                rospy.Time(),
             )
 
-            # Adjust the pose as needed before sending it as a goal
-            # For example, you might want to adjust the orientation or the position slightly
-            # to ensure the robot approaches the tag correctly
-            goal_pose = PoseStamped()
-            goal_pose.header.frame_id = "base_link"
-            goal_pose.header.stamp = rospy.Time.now()
-            goal_pose.pose.position = pose_transformed.pose.position
+            # Create a transform message
+            transform = tf2_ros.TransformStamped()
 
-            # Adjust orientation (example: facing towards the tag directly)
-            # This is a placeholder for whatever orientation adjustment you need
+            transform.transform.translation.x = trans.transform.translation.x
+            transform.transform.translation.y = trans.transform.translation.y
+            transform.transform.translation.z = trans.transform.translation.z
+            transform.transform.rotation.x = trans.transform.rotation.x
+            transform.transform.rotation.y = trans.transform.rotation.y
+            transform.transform.rotation.z = trans.transform.rotation.z
+            transform.transform.rotation.w = trans.transform.rotation.w
+
+            # Transform the tag pose from the camera frame to the map frame
+            pose_transformed = tf2_geometry_msgs.do_transform_pose(pose_msg, transform)
+            pose_transformed.header.frame_id = "capstone/base_link"
+
+            # make the hand point in a nicer way (no roll or pitch)
             quaternion = (
                 pose_transformed.pose.orientation.x,
                 pose_transformed.pose.orientation.y,
                 pose_transformed.pose.orientation.z,
                 pose_transformed.pose.orientation.w,
             )
-            _, _, yaw = euler_from_quaternion(quaternion)
-            q = quaternion_from_euler(0, 0, yaw)  # Adjust as necessary
-            goal_pose.pose.orientation.x = q[0]
-            goal_pose.pose.orientation.y = q[1]
-            goal_pose.pose.orientation.z = q[2]
-            goal_pose.pose.orientation.w = q[3]
+            roll, pitch, yaw = euler_from_quaternion(quaternion)
+
+            q = quaternion_from_euler(0, 0, yaw + 3.14159)
+            pose_transformed.pose.orientation.x = q[0]
+            pose_transformed.pose.orientation.y = q[1]
+            pose_transformed.pose.orientation.z = q[2]
+            pose_transformed.pose.orientation.w = q[3]
+
+            pose_transformed.pose.position.z = 0
 
             # Publish the goal pose to the move_base
             # self.move_base_pub.publish(goal_pose)
-            self.commandQueue.append(("base", goal_pose))
+            if len(self.commandQueue) < 2:
+                self.commandQueue.append(("base", pose_transformed))
             rospy.loginfo(f"Published move_base goal for tag.")
         except (
             tf2_ros.LookupException,
@@ -171,23 +248,52 @@ class RobotNode(object):
             rospy.logerr("Error transforming tag pose to base_link frame: %s" % str(e))
 
     def execute_moving_arm_state(self):
-        if not self.tag_detected or self.current_tag_pose is None:
+        if not self.tag_detected or self.current_detection is None:
             rospy.loginfo("No tag detected or tag pose not available for moving arm.")
             return
 
         try:
-            # Convert the tag pose to the robot's base frame (assuming the arm's planning frame is 'base_link')
+            tag_id = self.current_detection.id
+            print("trying to poke tag ")
+            print(tag_id)
+            print("\n")
+            tag_pose = self.current_detection.pose.pose.pose
+            tag_size = self.current_detection.size
+
+            # Convert the apriltag detection to a PoseStamped message in the camera_link frame
+            camera_frame = self.current_detection.pose.header.frame_id
+            pose_msg = PoseStamped()
+            pose_msg.header.frame_id = camera_frame
+            pose_msg.pose.position.x = tag_pose.position.x
+            pose_msg.pose.position.y = tag_pose.position.y
+            pose_msg.pose.position.z = tag_pose.position.z
+
+            pose_msg.pose.orientation.x = tag_pose.orientation.x
+            pose_msg.pose.orientation.y = tag_pose.orientation.y
+            pose_msg.pose.orientation.z = tag_pose.orientation.z
+            pose_msg.pose.orientation.w = tag_pose.orientation.w
+
+            # Convert the apriltag detection (camera frame) to a PoseStamped message in the map frame
             trans = self.buffer.lookup_transform(
-                "base_link", self.current_tag_pose.header.frame_id, rospy.Time(0)
-            )
-            pose_transformed = tf2_geometry_msgs.do_transform_pose(
-                self.current_tag_pose, trans
+                "capstone/base_link", camera_frame, rospy.Time()
             )
 
-            # Adjust the pose as needed before commanding the arm
-            # For example, adjust the orientation or the position slightly
-            # to ensure the arm approaches the tag correctly
-            # Here, we make the hand point in a nicer way (no roll or pitch) and adjust yaw
+            # Create a transform message
+            transform = tf2_ros.TransformStamped()
+
+            transform.transform.translation.x = trans.transform.translation.x
+            transform.transform.translation.y = trans.transform.translation.y
+            transform.transform.translation.z = trans.transform.translation.z
+            transform.transform.rotation.x = trans.transform.rotation.x
+            transform.transform.rotation.y = trans.transform.rotation.y
+            transform.transform.rotation.z = trans.transform.rotation.z
+            transform.transform.rotation.w = trans.transform.rotation.w
+
+            # Transform the tag pose from the camera frame to the map frame
+            pose_transformed = tf2_geometry_msgs.do_transform_pose(pose_msg, transform)
+            pose_transformed.header.frame_id = "capstone/base_link"
+
+            # make the hand point in a nicer way (no roll or pitch)
             yaw = math.atan2(
                 pose_transformed.pose.position.y, pose_transformed.pose.position.x
             )
@@ -198,7 +304,8 @@ class RobotNode(object):
             pose_transformed.pose.orientation.w = q[3]
 
             # Set the target pose for the arm
-            self.commandQueue.append(("arm", pose_transformed))
+            if len(self.commandQueue) < 2:
+                self.commandQueue.append(("arm", pose_transformed))
             rospy.loginfo("Arm moving to target pose.")
         except (
             tf2_ros.LookupException,
@@ -210,14 +317,16 @@ class RobotNode(object):
 
     def process_command_queue(self):
         if len(self.commandQueue) > 0:
+            print(f"commandQueue: {self.commandQueue}")
             command_type, target = self.commandQueue.pop(0)
             if command_type == "base":
+                self.execute_resetting_arm_state()
                 self.move_base_pub.publish(target)
             elif command_type == "arm":
                 self.commander.set_pose_target(target)
                 self.commander.go()
-            elif command_type == "stow":
-                self.execute_resetting_arm_state()
+            # elif command_type == "stow":
+            #     self.execute_resetting_arm_state()
             # After processing, check for state transitions
             self.check_and_update_state(command_type)
 
@@ -230,22 +339,22 @@ class RobotNode(object):
                 next_next_command_type, _ = self.commandQueue[1]
 
                 # If the next two states are not arm commands, insert the stowing command
-                if next_command_type != "arm" and next_next_command_type != "arm":
-                    self.commandQueue.insert(0, ("arm", "stow"))
-                    self.state = self.RESETTING_ARM
-                    rospy.loginfo(
-                        "Inserted stowing command before transitioning to next state."
-                    )
+                # if next_command_type != "arm" and next_next_command_type != "arm":
+                #     self.commandQueue.insert(0, ("arm", "stow"))
+                #     self.state = self.RESETTING_ARM
+                #     rospy.loginfo(
+                #         "Inserted stowing command before transitioning to next state."
+                #     )
             # If there are less than 2 commands in the queue, just insert the stowing command
-            else:
-                self.commandQueue.insert(0, ("arm", "stow"))
-                self.state = self.RESETTING_ARM
-                rospy.loginfo(
-                    "Inserted stowing command before transitioning to next state."
-                )
+            # else:
+            #     self.commandQueue.insert(0, ("arm", "stow"))
+            #     self.state = self.RESETTING_ARM
+            #     rospy.loginfo(
+            #         "Inserted stowing command before transitioning to next state."
+            #     )
 
     def start(self):
-        rate = rospy.Rate(1)  # Adjust the rate as needed
+        rate = rospy.Rate(0.2)  # Adjust the rate as needed
         while not rospy.is_shutdown():
             self.process_command_queue()
             # State transitions are now handled after command processing
