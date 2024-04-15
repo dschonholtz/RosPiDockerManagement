@@ -40,7 +40,8 @@ class RobotNode(object):
         if not tag_detections.detections:
             self.state = self.SEARCHING
             self.tag_detected = False
-            self.execute_searching_state()
+            if len(self.commandQueue) == 0:
+                self.execute_searching_state()
             return
         self.tag_detected = True
         detection = tag_detections.detections[0]
