@@ -216,14 +216,33 @@ class RobotNode(object):
             elif command_type == "arm":
                 self.commander.set_pose_target(target)
                 self.commander.go()
+            elif command_type == "stow":
+                self.execute_resetting_arm_state()
             # After processing, check for state transitions
             self.check_and_update_state(command_type)
 
     def check_and_update_state(self, last_command_type):
-        # Example logic for transitioning from MOVING_ARM to RESETTING_ARM
-        if self.state != self.MOVING_ARM and last_command_type == "arm":
-            self.state = self.RESETTING_ARM
-            self.execute_resetting_arm_state()
+        # Check if the last command was an arm command and not the stowing command
+        if last_command_type == "arm" and self.state != self.RESETTING_ARM:
+            # Look at the next two states in the command queue
+            if len(self.commandQueue) >= 2:
+                next_command_type, _ = self.commandQueue[0]
+                next_next_command_type, _ = self.commandQueue[1]
+
+                # If the next two states are not arm commands, insert the stowing command
+                if next_command_type != "arm" and next_next_command_type != "arm":
+                    self.commandQueue.insert(0, ("arm", "stow"))
+                    self.state = self.RESETTING_ARM
+                    rospy.loginfo(
+                        "Inserted stowing command before transitioning to next state."
+                    )
+            # If there are less than 2 commands in the queue, just insert the stowing command
+            else:
+                self.commandQueue.insert(0, ("arm", "stow"))
+                self.state = self.RESETTING_ARM
+                rospy.loginfo(
+                    "Inserted stowing command before transitioning to next state."
+                )
 
     def start(self):
         rate = rospy.Rate(1)  # Adjust the rate as needed
