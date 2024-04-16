@@ -21,49 +21,29 @@ class RobotNode(object):
     MOVING_ARM = 2
     RESETTING_ARM = 3
 
+
     def __init__(self):
         # Initialize ROS, subscribers, and publishers
         self.state = self.SEARCHING
-        self.tag_detected = False
-        self.buffer = tf2_ros.Buffer()
+        self.buffer = tf2_ros.Buffer(cache_time=rospy.Duration(6))
         self.tflistener = tf2_ros.TransformListener(self.buffer)
-        self.move_base_pub = rospy.Publisher(
-            "/move_base_simple/goal", PoseStamped, queue_size=10
-        )
+        self.current_detection = None
+        self.last_tag_processed = rospy.Time().now().to_sec()
 
         rospy.Subscriber(
             "/tag_detections", AprilTagDetectionArray, self.tag_detections_callback
         )
         self.commander = MoveGroupCommander("arm")
-        self.move_base_client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
+        self.move_base_client = actionlib.SimpleActionClient('/move_base', MoveBaseAction)
         self.move_base_client.wait_for_server(rospy.Duration(5))
 
     def tag_detections_callback(self, tag_detections):
-        if not tag_detections.detections:
-            self.state = self.SEARCHING
-            self.tag_detected = False
-            self.execute_searching_state()
-            return
-        self.tag_detected = True
-        detection = tag_detections.detections[0]
-        tag_id = detection.id[0]
-        self.current_detection = detection
+        if tag_detections.detections:
+            self.current_detection = tag_detections.detections[0]
+            self.last_tag_processed = rospy.Time().now().to_sec()
+            if self.state == RobotNode.SEARCHING:
+                self.move_base_client.cancel_all_goals()
 
-        # Calculate the distance to the tag
-        distance = self.calculate_distance(detection)
-        print(f"distance: {distance}")
-        print(f"state: {self.state}")
-        if distance > 1.6:
-            if self.state != self.MOVING_BASE:
-                print(f"Moving base towards tag {tag_id}")
-                self.state = self.MOVING_BASE
-                self.execute_resetting_arm_state()
-                self.execute_moving_base_state()
-        else:
-            if self.state != self.MOVING_ARM:
-                print(f"Moving arm towards tag {tag_id}")
-                self.state = self.MOVING_ARM
-                self.execute_moving_arm_state()
 
     def get_pose_msg_from_detection(self, detection):
         camera_frame = detection.pose.header.frame_id
@@ -118,7 +98,7 @@ class RobotNode(object):
             self.commander.set_named_target("stowed")
 
             # Command the arm to move to the default pose
-            self.commander.go()
+            self.commander.go(wait=True)
             rospy.loginfo("Arm resetting to default pose.")
         except MoveItCommanderException as e:
             rospy.logerr("Error in resetting arm to default pose: %s" % str(e))
@@ -162,21 +142,26 @@ class RobotNode(object):
             # # Calculate the new orientation by adding 45 degrees (0.785 radians) to the current yaw
             yaw_rotation = 0.785  # 45 degrees in radians
             new_yaw = current_orientation[2] + yaw_rotation
+            print(f"current yaw: {current_orientation[2]}")
+            print(f"new yaw: {new_yaw}")
             q = quaternion_from_euler(0, 0, new_yaw)
 
+
+            goal_pose = self.buffer.transform(goal_pose, "map")
             goal_pose.pose.orientation.x = q[0]
             goal_pose.pose.orientation.y = q[1]
             goal_pose.pose.orientation.z = q[2]
             goal_pose.pose.orientation.w = q[3]
 
-            goal_pose = self.buffer.transform(goal_pose, "map")
-
-            # Append the rotate command to the command queue
+            self.move_base_client.cancel_all_goals()
             goal = MoveBaseGoal()
+            goal.target_pose = goal_pose
             # Set up your goal here
+            print('about to send searching goal')
             self.move_base_client.send_goal(goal)
+            print('goal sent waitin')
             self.move_base_client.wait_for_result()
-            rospy.loginfo("Added rotate base command to the queue.")
+            print('getting results')
         except Exception as e:
             rospy.logerr(
                 f"Error in executing searching state (rotating base): {str(e)}"
@@ -238,8 +223,10 @@ class RobotNode(object):
             pose_transformed.pose.position.z = 0
 
             # Publish the goal pose to the move_base
-            # self.move_base_pub.publish(goal_pose)
-            self.move_base_client.send_goal(pose_transformed)
+            self.move_base_client.cancel_all_goals()
+            goal = MoveBaseGoal()
+            goal.target_pose = pose_transformed
+            self.move_base_client.send_goal(goal)
             rospy.loginfo("Sending goal to move_base")
 
             # Optionally, wait for the server to finish performing the action.
@@ -282,21 +269,9 @@ class RobotNode(object):
             pose_msg.pose.orientation.z = tag_pose.orientation.z
             pose_msg.pose.orientation.w = tag_pose.orientation.w
 
-            # Convert the apriltag detection (camera frame) to a PoseStamped message in the map frame
-            trans = self.buffer.lookup_transform(
-                "capstone/base_link", camera_frame, rospy.Time()
+            transform = self.buffer.lookup_transform(
+                "capstone/base_link", camera_frame, self.current_detection.pose.header.stamp
             )
-
-            # Create a transform message
-            transform = tf2_ros.TransformStamped()
-
-            transform.transform.translation.x = trans.transform.translation.x
-            transform.transform.translation.y = trans.transform.translation.y
-            transform.transform.translation.z = trans.transform.translation.z
-            transform.transform.rotation.x = trans.transform.rotation.x
-            transform.transform.rotation.y = trans.transform.rotation.y
-            transform.transform.rotation.z = trans.transform.rotation.z
-            transform.transform.rotation.w = trans.transform.rotation.w
 
             # Transform the tag pose from the camera frame to the map frame
             pose_transformed = tf2_geometry_msgs.do_transform_pose(pose_msg, transform)
@@ -312,9 +287,11 @@ class RobotNode(object):
             pose_transformed.pose.orientation.z = q[2]
             pose_transformed.pose.orientation.w = q[3]
 
-            # Set the target pose for the arm
-            if len(self.commandQueue) < 2:
-                self.commandQueue.append(("arm", pose_transformed))
+            # pose_transformed = self.tflistener.transform(pose_msg, "map")
+
+            self.commander.set_pose_target(pose_transformed)
+            self.commander.go()
+
             rospy.loginfo("Arm moving to target pose.")
         except (
             tf2_ros.LookupException,
@@ -324,11 +301,42 @@ class RobotNode(object):
         ) as e:
             rospy.logerr("Error in moving arm towards tag: %s" % str(e))
 
+    def handle_state_machine(self):
+        # if rospy.Time().now().to_sec() - self.last_seconds_processed > 5:
+        # self.last_seconds_processed = rospy.Time().now().to_sec()
+        if not self.current_detection or rospy.Time().now().to_sec() - self.last_tag_processed > 5:
+            self.state = self.SEARCHING
+            self.tag_detected = False
+            self.execute_resetting_arm_state()
+            print('searching')
+            self.execute_searching_state()
+            return
+        self.tag_detected = True
+        detection = self.current_detection
+        tag_id = detection.id[0]
+        
+        # Calculate the distance to the tag
+        distance = self.calculate_distance(detection)
+        print(f"distance: {distance}")
+        print(f"state: {self.state}")
+        if distance > 1.6:
+            if self.state != self.MOVING_BASE:
+                print(f"Moving base towards tag {tag_id}")
+                self.state = self.MOVING_BASE
+                self.execute_resetting_arm_state()
+                self.execute_moving_base_state()
+        else:
+            if self.state != self.MOVING_ARM:
+                print(f"Moving arm towards tag {tag_id}")
+                self.state = self.MOVING_ARM
+                self.execute_moving_arm_state()
+
+
     def start(self):
         rate = rospy.Rate(0.2)  # Adjust the rate as needed
         while not rospy.is_shutdown():
-            self.process_command_queue()
             # State transitions are now handled after command processing
+            self.handle_state_machine()
             rate.sleep()
 
 
