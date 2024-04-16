@@ -12,7 +12,8 @@ from moveit_commander import (
     roscpp_initialize,
     roscpp_shutdown,
 )
-
+import actionlib
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
 class RobotNode(object):
     SEARCHING = 0
@@ -24,7 +25,6 @@ class RobotNode(object):
         # Initialize ROS, subscribers, and publishers
         self.state = self.SEARCHING
         self.tag_detected = False
-        self.commandQueue = []
         self.buffer = tf2_ros.Buffer()
         self.tflistener = tf2_ros.TransformListener(self.buffer)
         self.move_base_pub = rospy.Publisher(
@@ -35,13 +35,14 @@ class RobotNode(object):
             "/tag_detections", AprilTagDetectionArray, self.tag_detections_callback
         )
         self.commander = MoveGroupCommander("arm")
+        self.move_base_client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
+        self.move_base_client.wait_for_server(rospy.Duration(5))
 
     def tag_detections_callback(self, tag_detections):
         if not tag_detections.detections:
             self.state = self.SEARCHING
             self.tag_detected = False
-            if len(self.commandQueue) == 0:
-                self.execute_searching_state()
+            self.execute_searching_state()
             return
         self.tag_detected = True
         detection = tag_detections.detections[0]
@@ -56,6 +57,7 @@ class RobotNode(object):
             if self.state != self.MOVING_BASE:
                 print(f"Moving base towards tag {tag_id}")
                 self.state = self.MOVING_BASE
+                self.execute_resetting_arm_state()
                 self.execute_moving_base_state()
         else:
             if self.state != self.MOVING_ARM:
@@ -118,9 +120,6 @@ class RobotNode(object):
             # Command the arm to move to the default pose
             self.commander.go()
             rospy.loginfo("Arm resetting to default pose.")
-
-            # After resetting, you might want to transition to another state, such as SEARCHING
-            self.state = self.SEARCHING
         except MoveItCommanderException as e:
             rospy.logerr("Error in resetting arm to default pose: %s" % str(e))
 
@@ -173,8 +172,10 @@ class RobotNode(object):
             goal_pose = self.buffer.transform(goal_pose, "map")
 
             # Append the rotate command to the command queue
-            if len(self.commandQueue) < 2:
-                self.commandQueue.append(("base", goal_pose))
+            goal = MoveBaseGoal()
+            # Set up your goal here
+            self.move_base_client.send_goal(goal)
+            self.move_base_client.wait_for_result()
             rospy.loginfo("Added rotate base command to the queue.")
         except Exception as e:
             rospy.logerr(
@@ -238,9 +239,17 @@ class RobotNode(object):
 
             # Publish the goal pose to the move_base
             # self.move_base_pub.publish(goal_pose)
-            if len(self.commandQueue) < 2:
-                self.commandQueue.append(("base", pose_transformed))
-            rospy.loginfo(f"Published move_base goal for tag.")
+            self.move_base_client.send_goal(pose_transformed)
+            rospy.loginfo("Sending goal to move_base")
+
+            # Optionally, wait for the server to finish performing the action.
+            self.move_base_client.wait_for_result()
+
+            # Check the result (optional)
+            if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
+                rospy.loginfo("Goal succeeded!")
+            else:
+                rospy.loginfo("Goal failed!")
         except (
             tf2_ros.LookupException,
             tf2_ros.ConnectivityException,
@@ -259,7 +268,6 @@ class RobotNode(object):
             print(tag_id)
             print("\n")
             tag_pose = self.current_detection.pose.pose.pose
-            tag_size = self.current_detection.size
 
             # Convert the apriltag detection to a PoseStamped message in the camera_link frame
             camera_frame = self.current_detection.pose.header.frame_id
@@ -315,44 +323,6 @@ class RobotNode(object):
             MoveItCommanderException,
         ) as e:
             rospy.logerr("Error in moving arm towards tag: %s" % str(e))
-
-    def process_command_queue(self):
-        if len(self.commandQueue) > 0:
-            print(f"commandQueue: {self.commandQueue}")
-            command_type, target = self.commandQueue.pop(0)
-            if command_type == "base":
-                self.execute_resetting_arm_state()
-                self.move_base_pub.publish(target)
-            elif command_type == "arm":
-                self.commander.set_pose_target(target)
-                self.commander.go()
-            # elif command_type == "stow":
-            #     self.execute_resetting_arm_state()
-            # After processing, check for state transitions
-            self.check_and_update_state(command_type)
-
-    def check_and_update_state(self, last_command_type):
-        # Check if the last command was an arm command and not the stowing command
-        if last_command_type == "arm" and self.state != self.RESETTING_ARM:
-            # Look at the next two states in the command queue
-            if len(self.commandQueue) >= 2:
-                next_command_type, _ = self.commandQueue[0]
-                next_next_command_type, _ = self.commandQueue[1]
-
-                # If the next two states are not arm commands, insert the stowing command
-                # if next_command_type != "arm" and next_next_command_type != "arm":
-                #     self.commandQueue.insert(0, ("arm", "stow"))
-                #     self.state = self.RESETTING_ARM
-                #     rospy.loginfo(
-                #         "Inserted stowing command before transitioning to next state."
-                #     )
-            # If there are less than 2 commands in the queue, just insert the stowing command
-            # else:
-            #     self.commandQueue.insert(0, ("arm", "stow"))
-            #     self.state = self.RESETTING_ARM
-            #     rospy.loginfo(
-            #         "Inserted stowing command before transitioning to next state."
-            #     )
 
     def start(self):
         rate = rospy.Rate(0.2)  # Adjust the rate as needed
