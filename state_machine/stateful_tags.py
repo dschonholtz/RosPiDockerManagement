@@ -1,6 +1,7 @@
 import rospy
 import math
 import sys
+from std_msgs.msg import Float64
 from geometry_msgs.msg import PoseStamped
 from apriltag_ros.msg import AprilTagDetectionArray
 import tf2_ros
@@ -33,6 +34,7 @@ class RobotNode(object):
         rospy.Subscriber(
             "/tag_detections", AprilTagDetectionArray, self.tag_detections_callback
         )
+        self.arm_publisher = rospy.Publisher("/capstone/arm_control/claw_command", Float64, queue_size=1)
         self.commander = MoveGroupCommander("arm")
         self.move_base_client = actionlib.SimpleActionClient('/move_base', MoveBaseAction)
         self.move_base_client.wait_for_server(rospy.Duration(5))
@@ -95,6 +97,7 @@ class RobotNode(object):
         try:
             # For simplicity, we're using a named target assumed to be predefined in the robot's SRDF
             # If using a zero state or specific joint values, you would set them differently
+            self.arm_publisher.publish(0.0)
             self.commander.set_named_target("stowed")
 
             # Command the arm to move to the default pose
@@ -251,6 +254,7 @@ class RobotNode(object):
             return
 
         try:
+            self.arm_publisher.publish(0.0)
             tag_id = self.current_detection.id
             print("trying to poke tag ")
             print(tag_id)
@@ -289,9 +293,10 @@ class RobotNode(object):
             pose_transformed.pose.orientation.w = q[3]
 
             # pose_transformed = self.tflistener.transform(pose_msg, "map")
-
+            self.arm_publisher.publish(-1.0)
             self.commander.set_pose_target(pose_transformed)
             self.commander.go()
+            self.arm_publisher.publish(0.0)
 
             rospy.loginfo("Arm moving to target pose.")
         except (
@@ -320,7 +325,7 @@ class RobotNode(object):
         distance = self.calculate_distance(detection)
         print(f"distance: {distance}")
         print(f"state: {self.state}")
-        if distance > 1.6:
+        if distance > 1.5:
             # if self.state != self.MOVING_BASE:
             print(f"Moving base towards tag {tag_id}")
             self.state = self.MOVING_BASE
