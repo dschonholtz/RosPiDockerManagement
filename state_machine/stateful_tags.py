@@ -245,6 +245,7 @@ class RobotNode(object):
             rospy.logerr("Error transforming tag pose to base_link frame: %s" % str(e))
 
     def execute_moving_arm_state(self):
+        print('attempting to execute arm state')
         if not self.tag_detected or self.current_detection is None:
             rospy.loginfo("No tag detected or tag pose not available for moving arm.")
             return
@@ -281,7 +282,7 @@ class RobotNode(object):
             yaw = math.atan2(
                 pose_transformed.pose.position.y, pose_transformed.pose.position.x
             )
-            q = quaternion_from_euler(0, 0, yaw)
+            q = quaternion_from_euler(1.5708, 0, yaw)
             pose_transformed.pose.orientation.x = q[0]
             pose_transformed.pose.orientation.y = q[1]
             pose_transformed.pose.orientation.z = q[2]
@@ -320,16 +321,16 @@ class RobotNode(object):
         print(f"distance: {distance}")
         print(f"state: {self.state}")
         if distance > 1.6:
-            if self.state != self.MOVING_BASE:
-                print(f"Moving base towards tag {tag_id}")
-                self.state = self.MOVING_BASE
-                self.execute_resetting_arm_state()
-                self.execute_moving_base_state()
+            # if self.state != self.MOVING_BASE:
+            print(f"Moving base towards tag {tag_id}")
+            self.state = self.MOVING_BASE
+            self.execute_resetting_arm_state()
+            self.execute_moving_base_state()
         else:
-            if self.state != self.MOVING_ARM:
-                print(f"Moving arm towards tag {tag_id}")
-                self.state = self.MOVING_ARM
-                self.execute_moving_arm_state()
+            # if self.state != self.MOVING_ARM:
+            print(f"Moving arm towards tag {tag_id}")
+            self.state = self.MOVING_ARM
+            self.execute_moving_arm_state()
 
 
     def start(self):
